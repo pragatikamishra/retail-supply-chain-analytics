@@ -345,3 +345,199 @@ print("\n--- Export results ---")
 print(f"Eligible sales: {sales_rows:,} rows")
 print(f"Transaction audit: {audit_rows:,} rows")
 print(f"Saved to: {cleaned_folder}")
+
+
+cancellation_candidates = df.loc[
+    df["is_cancellation"]
+    & ~df["is_non_product"]
+    & ~df["needs_product_review"]
+    & ~df["is_exact_duplicate"]
+    & ~df["has_invalid_date"]
+    & ~df["is_outside_expected_period"]
+    & df["Quantity"].lt(0)
+    & df["UnitPrice"].gt(0)
+].copy()
+
+print("\n--- Product cancellation candidates ---")
+print("Cancellation lines:", len(cancellation_candidates))
+print(
+    "With customer ID:",
+    cancellation_candidates["CustomerID"].notna().sum()
+)
+print(
+    "Missing customer ID:",
+    cancellation_candidates["CustomerID"].isna().sum()
+)
+
+
+sales_for_matching = eligible_sales.loc[
+    eligible_sales["CustomerID"].notna(),
+    [
+        "source_row_id", "CustomerID", "StockCode",
+        "UnitPrice", "Quantity", "validated_invoice_date"
+    ]
+].copy()
+
+cancellations_for_matching = cancellation_candidates.loc[
+    cancellation_candidates["CustomerID"].notna(),
+    [
+        "source_row_id", "CustomerID", "StockCode",
+        "UnitPrice", "Quantity", "validated_invoice_date"
+    ]
+].copy()
+
+# Use the same positive quantity for comparison.
+cancellations_for_matching["Quantity"] = (
+    -cancellations_for_matching["Quantity"]
+)
+
+potential_pairs = cancellations_for_matching.merge(
+    sales_for_matching,
+    on=["CustomerID", "StockCode", "UnitPrice", "Quantity"],
+    suffixes=("_cancel", "_sale"),
+    how="inner"
+)
+
+# Only consider sales recorded before the cancellation.
+potential_pairs = potential_pairs.loc[
+    potential_pairs["validated_invoice_date_sale"]
+    < potential_pairs["validated_invoice_date_cancel"]
+].copy()
+
+match_counts = potential_pairs.groupby(
+    "source_row_id_cancel"
+).size()
+
+cancellation_match_review = cancellations_for_matching[
+    ["source_row_id"]
+].copy()
+
+cancellation_match_review["candidate_sale_count"] = (
+    cancellation_match_review["source_row_id"]
+    .map(match_counts)
+    .fillna(0)
+    .astype(int)
+)
+
+print("\n--- Potential cancellation matches ---")
+print(
+    cancellation_match_review["candidate_sale_count"]
+    .value_counts()
+    .sort_index()
+    .rename_axis("candidate_sale_count")
+    .to_string(name="cancellation_lines")
+)
+
+# A sale appearing against several cancellations also needs review.
+sale_match_counts = potential_pairs.groupby(
+    "source_row_id_sale"
+).size()
+
+print(
+    "\nSales linked to multiple cancellation candidates:",
+    sale_match_counts.gt(1).sum()
+)
+
+
+potential_pairs["sale_candidates_for_cancel"] = (
+    potential_pairs.groupby("source_row_id_cancel")[
+        "source_row_id_sale"
+    ].transform("size")
+)
+
+potential_pairs["cancel_candidates_for_sale"] = (
+    potential_pairs.groupby("source_row_id_sale")[
+        "source_row_id_cancel"
+    ].transform("size")
+)
+
+unique_pairs = potential_pairs.loc[
+    potential_pairs["sale_candidates_for_cancel"].eq(1)
+    & potential_pairs["cancel_candidates_for_sale"].eq(1)
+].copy()
+
+unique_pairs["hours_to_cancellation"] = (
+    unique_pairs["validated_invoice_date_cancel"]
+    - unique_pairs["validated_invoice_date_sale"]
+).dt.total_seconds() / 3600
+
+print("\n--- Unique inferred cancellation pairs ---")
+print("Pairs:", len(unique_pairs))
+
+print("\nTime to cancellation, in hours:")
+print(unique_pairs["hours_to_cancellation"].describe())
+
+print("\nPreviously investigated SKUs:")
+print(
+    unique_pairs.loc[
+        unique_pairs["StockCode"].isin(["23843", "23166"]),
+        [
+            "StockCode",
+            "source_row_id_sale",
+            "source_row_id_cancel",
+            "Quantity",
+            "hours_to_cancellation"
+        ]
+    ].to_string(index=False)
+)
+
+
+rapid_reversal_pairs = unique_pairs.loc[
+    unique_pairs["hours_to_cancellation"].le(24)
+].copy()
+
+reversed_sale_ids = rapid_reversal_pairs["source_row_id_sale"]
+
+planning_sales = eligible_sales.loc[
+    ~eligible_sales["source_row_id"].isin(reversed_sale_ids)
+].copy()
+
+print("\n--- Rapid-reversal scenario ---")
+print("Inferred pairs within 24 hours:", len(rapid_reversal_pairs))
+print("Gross eligible sale lines:", len(eligible_sales))
+print("Planning sale lines:", len(planning_sales))
+
+print(
+    "Units excluded:",
+    eligible_sales["Quantity"].sum()
+    - planning_sales["Quantity"].sum()
+)
+
+print(
+    "Sales value excluded (GBP):",
+    round(
+        eligible_sales["line_sales_gbp"].sum()
+        - planning_sales["line_sales_gbp"].sum(),
+        2
+    )
+)
+
+# Validate the matching before exporting.
+assert rapid_reversal_pairs["source_row_id_sale"].is_unique
+assert rapid_reversal_pairs["source_row_id_cancel"].is_unique
+
+assert (
+    len(eligible_sales) - len(planning_sales)
+    == len(rapid_reversal_pairs)
+), "Excluded sale count does not match pair count"
+
+assert (
+    eligible_sales["Quantity"].sum()
+    - planning_sales["Quantity"].sum()
+    == rapid_reversal_pairs["Quantity"].sum()
+), "Excluded quantities do not reconcile"
+
+planning_file = cleaned_folder / "planning_sales_24h.csv"
+pairs_file = cleaned_folder / "rapid_reversal_pairs_24h.csv"
+
+planning_sales.to_csv(planning_file, index=False, encoding="utf-8")
+rapid_reversal_pairs.to_csv(pairs_file, index=False, encoding="utf-8")
+
+print("\n--- Planning exports ---")
+print("Planning sale lines:", len(planning_sales))
+print("Planning units:", planning_sales["Quantity"].sum())
+print(
+    "Planning sales value (GBP):",
+    round(planning_sales["line_sales_gbp"].sum(), 2)
+)
+print("Matching evidence pairs:", len(rapid_reversal_pairs))
