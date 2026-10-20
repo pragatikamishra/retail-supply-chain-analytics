@@ -1,4 +1,3 @@
-
 # Data Cleaning Rules
 
 ## Source and traceability
@@ -71,3 +70,45 @@ Missing customer IDs do not disqualify product-level sales.
 
 - data/cleaned/eligible_sales.csv
 - data/cleaned/transactions_audit.csv
+
+
+## Rapid-reversal planning scenario
+
+Purpose:
+Reduce the influence of apparent rapid transaction reversals
+on product-demand analysis.
+
+Matching conditions:
+
+- Same known customer ID, stock code, unit price and quantity.
+- Cancellation quantity is the exact opposite of sale quantity.
+- Sale occurs before cancellation.
+- Each cancellation has exactly one candidate sale.
+- Each sale has exactly one candidate cancellation.
+- Cancellation occurs within 24 hours of the sale.
+
+The 24-hour threshold is a project assumption.
+Matches are inferred, not confirmed original-invoice links.
+
+Results:
+
+- Inferred reversal pairs: 439
+- Excluded units: 170,451
+- Excluded sales value: GBP 276,957.94
+- Remaining sale lines: 522,065
+- Remaining units: 5,390,829
+- Remaining sales value: GBP 9,969,862.93
+
+Outputs:
+
+- data/cleaned/planning_sales_24h.csv
+- data/cleaned/rapid_reversal_pairs_24h.csv
+
+Limitations:
+
+- This is not a complete cancellation or returns reconciliation.
+- Partial, ambiguous, missing-customer and longer-gap
+  cancellations remain unresolved.
+- Gross-sales outputs remain available for comparison.
+- Historical forecast testing must avoid using cancellations
+  that were not yet known at the forecast cutoff.

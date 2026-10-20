@@ -541,3 +541,28 @@ print(
     round(planning_sales["line_sales_gbp"].sum(), 2)
 )
 print("Matching evidence pairs:", len(rapid_reversal_pairs))
+
+reversal_ids = rapid_reversal_pairs[
+    ["source_row_id_sale"]
+].rename(columns={"source_row_id_sale": "source_row_id"})
+
+assert len(reversal_ids) == 439
+assert reversal_ids["source_row_id"].is_unique
+
+reversal_ids.to_csv(
+    cleaned_folder / "rapid_reversal_sale_ids.csv",
+    index=False,
+    encoding="utf-8"
+)
+
+print("Exported reversal sale IDs:", len(reversal_ids))
+
+reversal_ids["exclusion_reason"] = "inferred_rapid_reversal_24h"
+
+reversal_ids.to_csv(
+    cleaned_folder / "rapid_reversal_sale_ids.csv",
+    index=False,
+    encoding="utf-8"
+)
+
+print("Exported reversal sale IDs:", len(reversal_ids))

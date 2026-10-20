@@ -78,3 +78,31 @@ print(
     df.loc[df["UnitPrice"] < 0]
     .to_string(index=False)
 )
+
+print("\n--- All source records for SKU 23843 ---")
+
+sku_mask = (
+    df["StockCode"]
+    .astype("string")
+    .str.strip()
+    .str.upper()
+    .eq("23843")
+)
+
+print(df.loc[sku_mask].to_string(index=False))
+
+print("\n--- Large source transactions for SKU 23166 ---")
+
+sku_mask = (
+    df["StockCode"]
+    .astype("string")
+    .str.strip()
+    .str.upper()
+    .eq("23166")
+)
+
+print(
+    df.loc[
+        sku_mask & df["Quantity"].abs().ge(10000)
+    ].to_string(index=False)
+)
